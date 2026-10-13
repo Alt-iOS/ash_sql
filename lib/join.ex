@@ -1106,12 +1106,15 @@ defmodule AshSql.Join do
       joined_query =
         Map.update!(joined_query, :__ash_bindings__, &Map.put(&1, :added_distinct?, true))
 
-      {joined_query, distinct} =
-        Enum.reduce(sort, {joined_query, []}, fn
-          {attribute, direction}, {joined_query, distinct} when is_atom(attribute) ->
-            {joined_query, [{attribute, direction} | distinct]}
+      # `whole_sort?` tracks whether every sort term made it into the distinct, which then
+      # starts with the whole sort and keeps the requested ordering without a row_number wrapper.
+      {joined_query, distinct, whole_sort?} =
+        Enum.reduce(sort, {joined_query, [], true}, fn
+          {attribute, direction}, {joined_query, distinct, whole_sort?} when is_atom(attribute) ->
+            {joined_query, [{attribute, direction} | distinct], whole_sort?}
 
-          {%Ash.Query.Calculation{} = calculation, direction}, {joined_query, distinct} ->
+          {%Ash.Query.Calculation{} = calculation, direction},
+          {joined_query, distinct, whole_sort?} ->
             resource = joined_query.__ash_bindings__.resource
 
             expression =
@@ -1135,19 +1138,22 @@ defmodule AshSql.Join do
               )
 
             case AshSql.Expr.dynamic_expr(joined_query, expression, joined_query.__ash_bindings__) do
-              {result, _} when is_atom(result) -> {joined_query, []}
-              {dynamic_expr, _} -> {joined_query, [{dynamic_expr, direction} | distinct]}
+              {result, _} when is_atom(result) ->
+                {joined_query, [], false}
+
+              {dynamic_expr, _} ->
+                {joined_query, [{dynamic_expr, direction} | distinct], whole_sort?}
             end
 
-          _other, {joined_query, distinct} ->
-            {joined_query, distinct}
+          _other, {joined_query, distinct, _whole_sort?} ->
+            {joined_query, distinct, false}
         end)
-        |> then(fn {joined_query, distinct} ->
+        |> then(fn {joined_query, distinct, whole_sort?} ->
           {joined_query,
            Enum.concat(
              Enum.reverse(distinct),
              Ash.Resource.Info.primary_key(joined_query.__ash_bindings__.resource)
-           )}
+           ), whole_sort?}
         end)
 
       distinct = distinct |> AshSql.Sort.sanitize_sort()
@@ -1155,6 +1161,10 @@ defmodule AshSql.Join do
       if joined_query.__ash_bindings__.sql_behaviour.multicolumn_distinct?() do
         from(row in joined_query,
           distinct: ^distinct
+        )
+        |> Map.update!(
+          :__ash_bindings__,
+          &Map.put(&1, :distinct_is_sort_prefix?, whole_sort? and sort != [])
         )
       else
         from(row in joined_query, distinct: true)
