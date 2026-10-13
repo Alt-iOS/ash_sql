@@ -2629,8 +2629,20 @@ defmodule AshSql.Aggregate.Lateral do
     # After flattening, we need to:
     # 1. Use the updated select_calculations from the rewritten query (which excludes :calculations)
     # 2. Add the flattened calculation/aggregate field names to the select
-    flattened_calc_fields = Map.keys(calculations_require_rewrite)
-    flattened_agg_fields = Map.keys(aggregates_require_rewrite)
+    # 3. Keep the fields an earlier rewrite flattened, such as the row_number wrapper for an
+    #    ordering DISTINCT ON: they are already flat in this select, and remap_mapped_fields
+    #    still reads them (a keyset built from a sort calculation among them, say).
+    flattened_calc_fields =
+      query.__ash_bindings__
+      |> Map.get(:calculations_require_rewrite, %{})
+      |> Map.merge(calculations_require_rewrite)
+      |> Map.keys()
+
+    flattened_agg_fields =
+      query.__ash_bindings__
+      |> Map.get(:aggregates_require_rewrite, %{})
+      |> Map.merge(aggregates_require_rewrite)
+      |> Map.keys()
 
     # Get select_calculations from the rewritten query (it has :calculations removed)
     select_calculations =
