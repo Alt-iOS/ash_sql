@@ -3311,12 +3311,16 @@ defmodule AshSql.Expr do
         query
       end
 
+    # Bindings continue after the parent's: nested under another exists, a subquery starting at 1
+    # would shadow the parent bindings its correlations name.
+    start_binding = (query.__ash_bindings__.current || 0) + 1
+
     {:ok, subquery} =
       AshSql.Join.related_subquery(first_relationship, query,
         filter: filter,
         filter_subquery?: true,
         sort?: Map.get(first_relationship, :from_many?) || not is_nil(first_relationship.sort),
-        start_bindings_at: 1,
+        start_bindings_at: start_binding,
         select_star?: !Map.get(first_relationship, :manual),
         in_group?: true,
         refs_at_path: full_at_path,
@@ -3352,7 +3356,7 @@ defmodule AshSql.Expr do
                   [
                     opts,
                     source_binding,
-                    1,
+                    start_binding,
                     subquery
                   ]
                 )
